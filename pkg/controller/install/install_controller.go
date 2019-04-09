@@ -3,7 +3,9 @@ package install
 import (
 	"context"
 	"flag"
+	"io"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"github.com/jcrossley3/manifestival/yaml"
@@ -13,7 +15,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -29,6 +33,10 @@ var (
 	log         = logf.Log.WithName("controller_install")
 )
 
+var (
+	ocp4workarounds string = filepath.Join("deploy", "resources", "ocp4hack.yaml")
+)
+
 func init() {
 	flag.StringVar(&filename, "manifest", latestVersionDir("deploy/resources"),
 		"The filename containing the tekton-cd pipeline release resources")
@@ -36,7 +44,7 @@ func init() {
 		"Automatically install pipeline if none exists")
 }
 
-// finds the directory in path that is latest
+// finds the directory in path that is latest or returns the path itself
 func latestVersionDir(path string) string {
 	entries, err := ioutil.ReadDir(path)
 	if err != nil {
@@ -76,9 +84,9 @@ func Add(mgr manager.Manager) error {
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 
 	return &ReconcileInstall{
-		client: mgr.GetClient(),
-		scheme: mgr.GetScheme(),
-		config: yaml.NewYamlManifest(filename, mgr.GetConfig()),
+		client:   mgr.GetClient(),
+		scheme:   mgr.GetScheme(),
+		manifest: yaml.NewYamlManifest(filename, mgr.GetConfig()),
 	}
 }
 
@@ -118,9 +126,49 @@ var _ reconcile.Reconciler = &ReconcileInstall{}
 type ReconcileInstall struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the apiserver
-	client client.Client
-	scheme *runtime.Scheme
-	config *yaml.YamlManifest
+	client   client.Client
+	scheme   *runtime.Scheme
+	manifest *yaml.YamlManifest
+}
+
+func (r *ReconcileInstall) applyWorkarounds() (reconcile.Result, error) {
+	logger := log.WithValues("workaround", "apply")
+
+	res, err := decode(ocp4workarounds)
+	if err != nil {
+		logger.Error(err, "scc not found")
+		return reconcile.Result{}, err
+	}
+	for _, obj := range res {
+		gvk := obj.GroupVersionKind()
+		logger.Info("creating", "gvk", gvk)
+
+		if err := r.client.Create(context.TODO(), &obj); err != nil {
+			logger.Error(err, "failed to apply workaround")
+			return reconcile.Result{}, err
+		}
+	}
+	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileInstall) removeWorkarounds() (reconcile.Result, error) {
+	logger := log.WithValues("workaround", "remove")
+
+	res, err := decode(ocp4workarounds)
+	if err != nil {
+		logger.Error(err, "scc not found")
+		return reconcile.Result{}, err
+	}
+	for _, obj := range res {
+		gvk := obj.GroupVersionKind()
+		logger.Info("removing", "gvk", gvk)
+
+		if err := r.client.Delete(context.TODO(), &obj); err != nil {
+			logger.Error(err, "failed to remove workaround")
+			return reconcile.Result{}, err
+		}
+	}
+	return reconcile.Result{}, nil
 }
 
 // Reconcile reads that state of the cluster for a Install object and makes changes based on the state read
@@ -137,14 +185,17 @@ func (r *ReconcileInstall) Reconcile(request reconcile.Request) (reconcile.Resul
 
 	// Fetch the Install instance
 	instance := &tektonv1alpha1.Install{}
+
 	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
-			r.config.Delete()
-			return reconcile.Result{}, nil
+			if r, err := r.removeWorkarounds(); err != nil {
+				return r, err
+			}
+			return reconcile.Result{}, r.manifest.Delete()
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
@@ -154,11 +205,24 @@ func (r *ReconcileInstall) Reconcile(request reconcile.Request) (reconcile.Resul
 		reqLogger.Info("skipping installation resources already set for setup crd")
 		return reconcile.Result{}, nil
 	}
+	if res, err := r.applyWorkarounds(); err != nil {
+		reqLogger.Error(err, "failed to apply workarounds")
+		return res, err
+	}
 
-	if err := r.config.Apply(instance); err != nil {
+	if err := r.manifest.Apply(instance); err != nil {
 		reqLogger.Error(err, "failed to apply pipeline manifest")
 		return reconcile.Result{}, err
 	}
+
+	// Update status
+	instance.Status.Resources = r.manifest.ResourceNames()
+	instance.Status.Version = "HACK" // figure out the version
+	if err = r.client.Status().Update(context.TODO(), instance); err != nil {
+		reqLogger.Error(err, "Failed to update status")
+		return reconcile.Result{}, err
+	}
+
 	return reconcile.Result{}, nil
 
 }
@@ -192,4 +256,30 @@ func createInstallCR(c client.Client) error {
 		return err
 	}
 	return nil
+}
+
+func decode(path string) ([]unstructured.Unstructured, error) {
+	result := []unstructured.Unstructured{}
+
+	r, err := os.Open(path)
+	if err != nil {
+		log.Error(err, "failed to open", "path", path)
+		return result, err
+	}
+	defer r.Close()
+
+	doc := yamlutil.NewYAMLToJSONDecoder(r)
+
+	for {
+		res := unstructured.Unstructured{}
+		if err = doc.Decode(&res); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return result, err
+		}
+
+		result = append(result, res)
+	}
+	return result, nil
 }
