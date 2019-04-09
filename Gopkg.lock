@@ -246,11 +246,11 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:a6bf1689470f489ac0d4109cdaaf421121decaf304ccdc4172afbc326fd65625"
+  digest = "1:209f69783dab2f523d44aae9465d92a1d367b16f17deb40f4cb40b17be5f59bb"
   name = "github.com/jcrossley3/manifestival"
   packages = ["yaml"]
   pruneopts = "NT"
-  revision = "f5dbe9f91641e3a25027414af373b4171bd84f4f"
+  revision = "6e3c0df8a9c710437e49b82ad250e24f3cf184df"
 
 [[projects]]
   digest = "1:f5b9328966ccea0970b1d15075698eff0ddb3e75889560aad2e9f76b289b536a"
@@ -929,9 +929,7 @@
     "k8s.io/apimachinery/pkg/runtime",
     "k8s.io/apimachinery/pkg/runtime/schema",
     "k8s.io/apimachinery/pkg/util/yaml",
-    "k8s.io/client-go/dynamic",
     "k8s.io/client-go/plugin/pkg/client/auth/gcp",
-    "k8s.io/client-go/rest",
     "k8s.io/code-generator/cmd/client-gen",
     "k8s.io/code-generator/cmd/conversion-gen",
     "k8s.io/code-generator/cmd/deepcopy-gen",
