@@ -9,8 +9,16 @@ import (
 type ConfigSpec struct {
 	// namespace where OpenShift pipelines will be installed
 	TargetNamespace string `json:"targetNamespace"`
+
 	// list of addon names to be installed with base
-	AddOns []string  `json:"addons,omitempty"`
+	Addons []AddonsSpec `json:"addons,omitempty"`
+}
+
+// AddonsSpec defines the observed state of Config
+// +k8s:openapi-gen=true
+type AddonsSpec struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 // ConfigStatus defines the observed state of Config
@@ -19,6 +27,9 @@ type ConfigStatus struct {
 
 	// installation status sorted in reverse chronological order
 	Conditions []ConfigCondition `json:"conditions,omitempty"`
+
+	// installation status of addons in reverse chronological order
+	Addons map[string][]AddonsCondition `json:"addons,omitempty"`
 }
 
 // ConfigCondition defines the observed state of installation at a point in time
@@ -36,6 +47,21 @@ type ConfigCondition struct {
 
 	// The version of OpenShift pipelines
 	Version string `json:"version"`
+}
+
+// AddonsCondition defines the observed state of installation at a point in time
+// +k8s:openapi-gen=true
+type AddonsCondition struct {
+	Name string `json:"name"`
+
+	// Code indicates the status of installation of addons
+	Code InstallStatus `json:"code"`
+
+	// Additional details about the Code
+	Details string `json:"details,omitempty"`
+
+	// list of addons
+	Resources []string `json:"resources"`
 }
 
 // InstallStatus describes the state of installation of pipelines

@@ -164,8 +164,8 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 		return reconcile.Result{}, nil
 	}
 
-	res := &op.Config{}
-	err := r.client.Get(context.TODO(), req.NamespacedName, res)
+	cfg := &op.Config{}
+	err := r.client.Get(context.TODO(), req.NamespacedName, cfg)
 
 	// ignore all resources except the `resourceWatched`
 	if req.Name != resourceWatched {
@@ -173,7 +173,7 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 
 		// handle resources that are not interesting as error
 		if !errors.IsNotFound(err) {
-			r.markInvalidResource(res)
+			r.markInvalidResource(cfg)
 		}
 		return reconcile.Result{}, nil
 	}
@@ -182,7 +182,7 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 	if errors.IsNotFound(err) {
 		// User deleted the cluster resource so delete the pipeine resources
 		log.Info("resource has been deleted")
-		return r.reconcileDeletion(req, res)
+		return r.reconcileDeletion(req, cfg)
 	}
 
 	// Error reading the object - requeue the request.
@@ -191,24 +191,33 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 		return reconcile.Result{}, err
 	}
 
-	err = r.deleteRemovedAddons(req, res)
+	if res, err := r.reconcilePipeline(req, cfg); err != nil {
+		return res, err
+	}
+
+	return r.reconcileAddons(req, cfg)
+
+	//////////////////////////////////////////////////////////////////////
+
+	// out of n
+	err = r.deleteRemovedAddons(req, cfg)
 	if err != nil {
 		log.Error(err, "failed to delete removed addon")
 		return reconcile.Result{}, err
 	}
 
-	if isUpToDate(res) {
+	if isUpToDate(cfg) {
 		log.Info("skipping installation, resource already up to date")
 
 		// Cheking for new addons
 		tfs := []mf.Transformer{
-			mf.InjectOwner(res),
-			mf.InjectNamespace(res.Spec.TargetNamespace),
+			mf.InjectOwner(cfg),
+			mf.InjectNamespace(cfg.Spec.TargetNamespace),
 		}
-		if err := r.installAddons(req, res, tfs); err != nil {
+		if err := r.installAddons(req, cfg, tfs); err != nil {
 			log.Error(err, "failed to install addons")
 			// ignoring failure to update
-			_ = r.updateStatus(res, op.ConfigCondition{
+			_ = r.updateStatus(cfg, op.ConfigCondition{
 				Code:    op.ErrorStatus,
 				Details: err.Error(),
 				Version: tektonVersion})
@@ -219,28 +228,65 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 
 	log.Info("installing pipelines", "path", resourceDir)
 
-	return r.reconcileInstall(req, res)
+	return r.reconcileInstall(req, cfg)
+
+}
+func addonsChanged(cfg op.Config) bool {
+	addons := cfg.Spec.Addons
+	status := cfg.Status.Addons
+
+	// new resource and the status is empty so only check if there
+	// are any addons to install
+	if len(status) == 0 {
+		return len(addons) != 0
+	}
+
+	// operator has a status so it may have installaled some addons
+	// diff addons and lastStatus.resources
+	// []string{} == []string{}
+
+	//lastStatus = status[0]
+	//if len(addons) > 0 && len(stau)
 
 }
 
-func (r *ReconcileConfig) reconcileInstall(req reconcile.Request, res *op.Config) (reconcile.Result, error) {
-	log := requestLogger(req, "install")
+type Mods struct {
+	Added, Updated, Deleted []string
 
-	err := r.updateStatus(res, op.ConfigCondition{Code: op.InstallingStatus, Version: tektonVersion})
+func (r *ReconcileConfig) reconcileAddons(req reconcile.Request, cfg *op.Config) (reconcile.Result, error) {
+	mods := diffAddons(config)
+	if !mods.any() {
+		return reconcile.Result{}, nil
+
+	}
+	installAddons(mods.Added)
+	deleteAddons(mods.Deleted)
+	updateAddons(mods.Updated)
+	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileConfig) reconcilePipeline(req reconcile.Request, cfg *op.Config) (reconcile.Result, error) {
+	log := requestLogger(req, "pipeline")
+	if isUpToDate(cfg) {
+		log.Info("skipping installation, resource already up to date")
+		return reconcile.Result{}, nil
+	}
+
+	err := r.updateStatus(cfg, op.ConfigCondition{Code: op.InstallingStatus, Version: tektonVersion})
 	if err != nil {
 		log.Error(err, "failed to set status")
 		return reconcile.Result{}, err
 	}
 
 	tfs := []mf.Transformer{
-		mf.InjectOwner(res),
-		mf.InjectNamespace(res.Spec.TargetNamespace),
+		mf.InjectOwner(cfg),
+		mf.InjectNamespace(cfg.Spec.TargetNamespace),
 	}
 
 	if err := r.manifest.Transform(tfs...); err != nil {
 		log.Error(err, "failed to apply manifest transformations")
 		// ignoring failure to update
-		_ = r.updateStatus(res, op.ConfigCondition{
+		_ = r.updateStatus(cfg, op.ConfigCondition{
 			Code:    op.ErrorStatus,
 			Details: err.Error(),
 			Version: tektonVersion})
@@ -250,17 +296,7 @@ func (r *ReconcileConfig) reconcileInstall(req reconcile.Request, res *op.Config
 	if err := r.manifest.ApplyAll(); err != nil {
 		log.Error(err, "failed to apply release.yaml")
 		// ignoring failure to update
-		_ = r.updateStatus(res, op.ConfigCondition{
-			Code:    op.ErrorStatus,
-			Details: err.Error(),
-			Version: tektonVersion})
-		return reconcile.Result{}, err
-	}
-
-	if err := r.installAddons(req, res, tfs); err != nil {
-		log.Error(err, "failed to install addons")
-		// ignoring failure to update
-		_ = r.updateStatus(res, op.ConfigCondition{
+		_ = r.updateStatus(cfg, op.ConfigCondition{
 			Code:    op.ErrorStatus,
 			Details: err.Error(),
 			Version: tektonVersion})
@@ -270,28 +306,86 @@ func (r *ReconcileConfig) reconcileInstall(req reconcile.Request, res *op.Config
 	log.Info("successfully applied all resources")
 
 	// NOTE: manifest when updating (not installing) already installed resources
-	// modifies the `res` but does not refersh it, hence refresh manually
-	if err := r.refreshCR(res); err != nil {
+	// modifies the `cfg` but does not refersh it, hence refresh manually
+	if err := r.refreshCR(cfg); err != nil {
 		log.Error(err, "status update failed to refresh object")
 		return reconcile.Result{}, err
 	}
 
-	err = r.updateStatus(res, op.ConfigCondition{
+	err = r.updateStatus(cfg, op.ConfigCondition{
 		Code: op.InstalledStatus, Version: tektonVersion})
 	return reconcile.Result{}, err
 }
 
-func (r *ReconcileConfig) installAddons(req reconcile.Request, res *op.Config, tfs []mf.Transformer) (error) {
+func (r *ReconcileConfig) reconcileInstall(req reconcile.Request, cfg *op.Config) (reconcile.Result, error) {
+	log := requestLogger(req, "install")
+
+	err := r.updateStatus(cfg, op.ConfigCondition{Code: op.InstallingStatus, Version: tektonVersion})
+	if err != nil {
+		log.Error(err, "failed to set status")
+		return reconcile.Result{}, err
+	}
+
+	tfs := []mf.Transformer{
+		mf.InjectOwner(cfg),
+		mf.InjectNamespace(cfg.Spec.TargetNamespace),
+	}
+
+	if err := r.manifest.Transform(tfs...); err != nil {
+		log.Error(err, "failed to apply manifest transformations")
+		// ignoring failure to update
+		_ = r.updateStatus(cfg, op.ConfigCondition{
+			Code:    op.ErrorStatus,
+			Details: err.Error(),
+			Version: tektonVersion})
+		return reconcile.Result{}, err
+	}
+
+	if err := r.manifest.ApplyAll(); err != nil {
+		log.Error(err, "failed to apply release.yaml")
+		// ignoring failure to update
+		_ = r.updateStatus(cfg, op.ConfigCondition{
+			Code:    op.ErrorStatus,
+			Details: err.Error(),
+			Version: tektonVersion})
+		return reconcile.Result{}, err
+	}
+
+	if err := r.installAddons(req, cfg, tfs); err != nil {
+		log.Error(err, "failed to install addons")
+		// ignoring failure to update
+		_ = r.updateStatus(cfg, op.ConfigCondition{
+			Code:    op.ErrorStatus,
+			Details: err.Error(),
+			Version: tektonVersion})
+		return reconcile.Result{}, err
+	}
+
+	log.Info("successfully applied all resources")
+
+	// NOTE: manifest when updating (not installing) already installed resources
+	// modifies the `cfg` but does not refersh it, hence refresh manually
+	if err := r.refreshCR(cfg); err != nil {
+		log.Error(err, "status update failed to refresh object")
+		return reconcile.Result{}, err
+	}
+
+	err = r.updateStatus(cfg, op.ConfigCondition{
+		Code: op.InstalledStatus, Version: tektonVersion})
+	return reconcile.Result{}, err
+}
+
+func (r *ReconcileConfig) installAddons(req reconcile.Request, cfg *op.Config, tfs []mf.Transformer) error {
 	log := requestLogger(req, "install addons")
 
-	for _, path := range res.Spec.AddOns {
+	for _, path := range cfg.Spec.AddOns {
 		_, ok := r.addons[path]
 		if !ok {
 			extension, err := mf.NewManifest(filepath.Join("deploy", "resources", path), true, r.client)
 			if err != nil {
 				log.Error(err, "failed to read addon  manifest")
 				// ignoring failure to update
-				_ = r.updateStatus(res, op.ConfigCondition{
+				_ = r.updateStatus(cfg, op.ConfigCondition{
 					Code:    op.ErrorStatus,
 					Details: err.Error(),
 					Version: tektonVersion})
@@ -300,7 +394,7 @@ func (r *ReconcileConfig) installAddons(req reconcile.Request, res *op.Config, t
 			if err = extension.Transform(tfs...); err != nil {
 				log.Error(err, "failed to apply manifest transformations")
 				// ignoring failure to update
-				_ = r.updateStatus(res, op.ConfigCondition{
+				_ = r.updateStatus(cfg, op.ConfigCondition{
 					Code:    op.ErrorStatus,
 					Details: err.Error(),
 					Version: tektonVersion})
@@ -310,7 +404,7 @@ func (r *ReconcileConfig) installAddons(req reconcile.Request, res *op.Config, t
 			if err = extension.ApplyAll(); err != nil {
 				log.Error(err, "failed to apply release.yaml")
 				// ignoring failure to update
-				_ = r.updateStatus(res, op.ConfigCondition{
+				_ = r.updateStatus(cfg, op.ConfigCondition{
 					Code:    op.ErrorStatus,
 					Details: err.Error(),
 					Version: tektonVersion})
@@ -324,7 +418,7 @@ func (r *ReconcileConfig) installAddons(req reconcile.Request, res *op.Config, t
 	return nil
 }
 
-func (r *ReconcileConfig) reconcileDeletion(req reconcile.Request, res *op.Config) (reconcile.Result, error) {
+func (r *ReconcileConfig) reconcileDeletion(req reconcile.Request, cfg *op.Config) (reconcile.Result, error) {
 	log := requestLogger(req, "delete")
 
 	log.Info("deleting pipeline resources")
@@ -343,14 +437,14 @@ func (r *ReconcileConfig) reconcileDeletion(req reconcile.Request, res *op.Confi
 
 }
 
-func (r *ReconcileConfig) deleteRemovedAddons(req reconcile.Request, res *op.Config) (error) {
+func (r *ReconcileConfig) deleteRemovedAddons(req reconcile.Request, cfg *op.Config) error {
 	log := requestLogger(req, "delete addons")
 
 	log.Info("checking removed addons ")
 	for path, extension := range r.addons {
 		log.Info("checking addon: " + path)
 		exist := false
-		for _, entry := range res.Spec.AddOns {
+		for _, entry := range cfg.Spec.AddOns {
 			if entry == path {
 				exist = true
 			}
@@ -366,7 +460,7 @@ func (r *ReconcileConfig) deleteRemovedAddons(req reconcile.Request, res *op.Con
 			if err := extension.DeleteAll(propPolicy); err != nil {
 				log.Error(err, "failed to delete addon")
 				// ignoring failure to update
-				_ = r.updateStatus(res, op.ConfigCondition{
+				_ = r.updateStatus(cfg, op.ConfigCondition{
 					Code:    op.ErrorStatus,
 					Details: err.Error(),
 					Version: tektonVersion})
@@ -378,8 +472,8 @@ func (r *ReconcileConfig) deleteRemovedAddons(req reconcile.Request, res *op.Con
 }
 
 // markInvalidResource sets the status of resourse as invalid
-func (r *ReconcileConfig) markInvalidResource(res *op.Config) {
-	err := r.updateStatus(res,
+func (r *ReconcileConfig) markInvalidResource(cfg *op.Config) {
+	err := r.updateStatus(cfg,
 		op.ConfigCondition{
 			Code:    op.ErrorStatus,
 			Details: "metadata.name must be " + resourceWatched,
@@ -389,34 +483,49 @@ func (r *ReconcileConfig) markInvalidResource(res *op.Config) {
 	}
 }
 
-// updateStatus set the status of res to s and refreshes res to the lastest version
-func (r *ReconcileConfig) updateStatus(res *op.Config, c op.ConfigCondition) error {
+// updateStatus set the status of cfg to s and refreshes cfg to the lastest version
+func (r *ReconcileConfig) updateStatus(cfg *op.Config, c op.ConfigCondition) error {
 
 	// NOTE: need to use a deepcopy since Status().Update() seems to reset the
-	// APIVersion of the res to "" making the object invalid; may be a mechanism
+	// APIVersion of the cfg to "" making the object invalid; may be a mechanism
 	// to prevent us from using stale version of the object
 
-	tmp := res.DeepCopy()
-	tmp.Status.Conditions = append([]op.ConfigCondition{c}, tmp.Status.Conditions...)
+	mods := cfg.DeepCopy()
+	mods.Status.Conditions = append([]op.ConfigCondition{c}, mods.Status.Conditions...)
+	return r.updateConfig(cfg, mods)
+}
 
-	if err := r.client.Status().Update(context.TODO(), tmp); err != nil {
+// updateAddonsStatus set the status of cfg to c and refreshes cfg to the lastest version
+func (r *ReconcileConfig) updateAddonsStatus(cfg *op.Config, c op.AddonsCondition) error {
+	// NOTE: need to use a deepcopy since Status().Update() seems to reset the
+	// APIVersion of the cfg to "" making the object invalid; may be a mechanism
+	// to prevent us from using stale version of the object
+
+	mods := cfg.DeepCopy()
+	mods.Status.Addons = append([]op.AddonsCondition{c}, mods.Status.Addons...)
+	return r.updateConfig(cfg, mods)
+}
+
+// updateConfig applies the mods to the config CR and refreshes it
+func (r *ReconcileConfig) updateConfig(cfg *op.Config, mods *op.Config) error {
+	if err := r.client.Status().Update(context.TODO(), mods); err != nil {
 		log.Error(err, "status update failed")
 		return err
 	}
 
-	if err := r.refreshCR(res); err != nil {
+	if err := r.refreshCR(cfg); err != nil {
 		log.Error(err, "status update failed to refresh object")
 		return err
 	}
 	return nil
 }
 
-func (r *ReconcileConfig) refreshCR(res *op.Config) error {
+func (r *ReconcileConfig) refreshCR(cfg *op.Config) error {
 	objKey := types.NamespacedName{
-		Namespace: res.Namespace,
-		Name:      res.Name,
+		Namespace: cfg.Namespace,
+		Name:      cfg.Name,
 	}
-	return r.client.Get(context.TODO(), objKey, res)
+	return r.client.Get(context.TODO(), objKey, cfg)
 }
 
 func createCR(c client.Client) error {

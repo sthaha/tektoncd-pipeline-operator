@@ -16,24 +16,53 @@ spec:
     openAPIV3Schema:
       properties:
         apiVersion:
+          description: 'APIVersion defines the versioned schema of this representation
+            of an object. Servers should convert recognized schemas to the latest
+            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#resources'
           type: string
         kind:
+          description: 'Kind is a string value representing the REST resource this
+            object represents. Servers may infer this from the endpoint the client
+            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds'
           type: string
         metadata:
           type: object
         spec:
           properties:
+            addons:
+              description: list of addon names to be installed with base
+              items:
+                type: string
+              type: array
             targetNamespace:
               description: namespace where OpenShift pipelines will be installed
               type: string
-            addons:
-              description: list of addons installed with the base pipeline
-              type: array
           required:
           - targetNamespace
           type: object
         status:
           properties:
+            addons:
+              description: installation status of addons in reverse chronological
+                order
+              items:
+                properties:
+                  code:
+                    description: Code indicates the status of installation of addons
+                    type: string
+                  details:
+                    description: Additional details about the Code
+                    type: string
+                  resources:
+                    description: list of addons
+                    items:
+                      type: string
+                    type: array
+                required:
+                - code
+                - resources
+                type: object
+              type: array
             conditions:
               description: installation status sorted in reverse chronological order
               items:
@@ -45,7 +74,7 @@ spec:
                     description: Additional details about the Code
                     type: string
                   version:
-                    description: The version of tekton pipelines
+                    description: The version of OpenShift pipelines
                     type: string
                 required:
                 - code

@@ -11,10 +11,53 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.AddonsCondition": schema_pkg_apis_operator_v1alpha1_AddonsCondition(ref),
 		"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.Config":          schema_pkg_apis_operator_v1alpha1_Config(ref),
 		"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.ConfigCondition": schema_pkg_apis_operator_v1alpha1_ConfigCondition(ref),
 		"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.ConfigSpec":      schema_pkg_apis_operator_v1alpha1_ConfigSpec(ref),
 		"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.ConfigStatus":    schema_pkg_apis_operator_v1alpha1_ConfigStatus(ref),
+	}
+}
+
+func schema_pkg_apis_operator_v1alpha1_AddonsCondition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "AddonsCondition defines the observed state of installation at a point in time",
+				Properties: map[string]spec.Schema{
+					"code": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Code indicates the status of installation of addons",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"details": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Additional details about the Code",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "list of addons",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"code", "resources"},
+			},
+		},
+		Dependencies: []string{},
 	}
 }
 
@@ -83,7 +126,7 @@ func schema_pkg_apis_operator_v1alpha1_ConfigCondition(ref common.ReferenceCallb
 					},
 					"version": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The version of tekton pipelines",
+							Description: "The version of OpenShift pipelines",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -104,9 +147,23 @@ func schema_pkg_apis_operator_v1alpha1_ConfigSpec(ref common.ReferenceCallback) 
 				Properties: map[string]spec.Schema{
 					"targetNamespace": {
 						SchemaProps: spec.SchemaProps{
-							Description: "namespace where tekton pipelines will be installed",
+							Description: "namespace where OpenShift pipelines will be installed",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"addons": {
+						SchemaProps: spec.SchemaProps{
+							Description: "list of addon names to be installed with base",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+									},
+								},
+							},
 						},
 					},
 				},
@@ -136,10 +193,23 @@ func schema_pkg_apis_operator_v1alpha1_ConfigStatus(ref common.ReferenceCallback
 							},
 						},
 					},
+					"addons": {
+						SchemaProps: spec.SchemaProps{
+							Description: "installation status of addons in reverse chronological order",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.AddonsCondition"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.ConfigCondition"},
+			"github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.AddonsCondition", "github.com/openshift/tektoncd-pipeline-operator/pkg/apis/operator/v1alpha1.ConfigCondition"},
 	}
 }
