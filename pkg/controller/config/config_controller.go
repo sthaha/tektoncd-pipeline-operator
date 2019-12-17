@@ -100,7 +100,7 @@ func readAddons(mgr manager.Manager) (mf.Manifest, error) {
 
 func readOptional(mgr manager.Manager) ([]unstructured.Unstructured, error) {
 	// check consolesample CRD available
-	consoleCRDinstalled, err := validate.CRD(mgr.GetConfig(), "consoleyamlsamples.console.openshift.io")
+	consoleCRDinstalled, err := validate.CRD(context.TODO(), mgr.GetClient(), "consoleyamlsamples.console.openshift.io")
 	if err != nil {
 		return []unstructured.Unstructured{}, err
 	}
