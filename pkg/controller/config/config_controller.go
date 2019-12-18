@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -89,32 +90,37 @@ func readAddons(mgr manager.Manager) (mf.Manifest, error) {
 	}
 
 	// add optionals to addons if any
-	optionalResources, err := readOptional(mgr)
-	if err != nil {
-		return mf.Manifest{}, err
-	}
-	addons.Resources = append(addons.Resources, optionalResources...)
+	//optionalResources, err := readOptional(mgr)
+	//if err != nil {
+	//return mf.Manifest{}, err
+	//}
+	//addons.Resources = append(addons.Resources, optionalResources...)
 
 	return addons, nil
 }
 
 func readOptional(mgr manager.Manager) ([]unstructured.Unstructured, error) {
 	// check consolesample CRD available
-	consoleCRDinstalled, err := validate.CRD(context.TODO(), mgr.GetClient(), "consoleyamlsamples.console.openshift.io")
-	if err != nil {
+	ctrlLog.Info("read optionals")
+
+	// NOTE: fails
+	exists, err := validate.CRD(context.TODO(), mgr.GetClient(), "consoleyamlsamples.console.openshift.io")
+	if err != nil || !exists {
+		ctrlLog.Error(err, "baaaaaaaaaaaaaaaad!")
 		return []unstructured.Unstructured{}, err
 	}
 
 	// read optionals only if CRD available
-	if consoleCRDinstalled {
-		optionalPath := filepath.Join(flag.ResourceDir, "optional")
-		optionalAddons, err := mf.NewManifest(optionalPath, flag.Recursive, mgr.GetClient())
-		if err != nil {
-			return []unstructured.Unstructured{}, err
-		}
-		return optionalAddons.Resources, nil
+	//if !hasCRD {
+	//return []unstructured.Unstructured{}, err
+	//}
+
+	optionalPath := filepath.Join(flag.ResourceDir, "optional")
+	optionalAddons, err := mf.NewManifest(optionalPath, flag.Recursive, mgr.GetClient())
+	if err != nil {
+		return []unstructured.Unstructured{}, err
 	}
-	return []unstructured.Unstructured{}, err
+	return optionalAddons.Resources, nil
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -155,6 +161,16 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		log.Error(err, "creation of config resource failed")
 		return err
 	}
+
+	exists, err := validate.CRD(context.TODO(), mgr.GetClient(), "consoleyamlsamples.console.openshift.io")
+	log.Info(".... console crd", "exists", exists, "sc", mgr.GetScheme().KnownTypes(schema.GroupVersion{Group: "apiextensions.k8s.io", Version: "v1beta1"}))
+	if err != nil || !exists {
+		log.Error(err, " add baaaaaaaad!")
+		return err
+	}
+
+	//log.Info(".... console crd", "exists", exists)
+
 	return nil
 }
 
@@ -184,6 +200,13 @@ func (r *ReconcileConfig) Reconcile(req reconcile.Request) (reconcile.Result, er
 
 	cfg := &op.Config{}
 	err := r.client.Get(context.TODO(), types.NamespacedName{Name: req.Name}, cfg)
+
+	exists, err := validate.CRD(context.TODO(), r.client, "consoleyamlsamples.console.openshift.io")
+	if err != nil || !exists {
+		log.Error(err, "baaaaaaaad!")
+		return reconcile.Result{}, nil
+	}
+	log.Info(".... console crd", "exists", exists)
 
 	// ignore all resources except the `resourceWatched`
 	if req.Name != flag.ResourceWatched {
@@ -313,6 +336,7 @@ func (r *ReconcileConfig) applyAddons(req reconcile.Request, cfg *op.Config) (re
 			Version: flag.TektonVersion})
 		return reconcile.Result{}, err
 	}
+
 	log.Info("successfully applied all resources")
 
 	err := r.updateStatus(cfg, op.ConfigCondition{Code: op.InstalledStatus, Version: flag.TektonVersion})

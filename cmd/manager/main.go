@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -14,6 +15,7 @@ import (
 	"github.com/tektoncd/operator/pkg/apis"
 	"github.com/tektoncd/operator/pkg/controller"
 	operator "github.com/tektoncd/operator/pkg/flag"
+	"github.com/tektoncd/operator/pkg/utils/validate"
 
 	"github.com/operator-framework/operator-sdk/pkg/k8sutil"
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
@@ -112,12 +114,15 @@ func main() {
 		log.Error(err, "")
 		os.Exit(1)
 	}
+	log.Info("Schema registered.")
 
 	// Setup all Controllers
 	if err := controller.AddToManager(mgr); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
+
+	log.Info("Controllers added to manager.")
 
 	if err = serveCRMetrics(cfg); err != nil {
 		log.Info("Could not generate and serve custom resource metrics", "error", err.Error())
@@ -135,6 +140,17 @@ func main() {
 	}
 
 	log.Info("Starting the Cmd.")
+
+	go func() {
+		time.Sleep(3 * time.Second)
+		exists, err := validate.CRD(context.TODO(), mgr.GetClient(), "consoleyamlsamples.console.openshift.io")
+		if err != nil || !exists {
+			log.Error(err, "baaaaaaaaaaaadddddd")
+			os.Exit(1)
+		}
+		log.Info("yooooooooooooooooo", "exists", exists)
+
+	}()
 
 	// Start the Cmd
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {

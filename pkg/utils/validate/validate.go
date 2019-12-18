@@ -4,8 +4,9 @@ import (
 	"context"
 
 	admissionregistration "k8s.io/api/admissionregistration/v1beta1"
-	"k8s.io/api/apps/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+
+	v1 "k8s.io/api/apps/v1"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -41,8 +42,8 @@ func Webhook(ctx context.Context, c client.Client, name string) (bool, error) {
 }
 
 func CRD(ctx context.Context, c client.Client, name string) (bool, error) {
-	crd := v1beta1.CustomResourceDefinition{}
+	crd := apiextensions.CustomResourceDefinition{}
 	key := client.ObjectKey{Name: name}
 	err := c.Get(ctx, key, &crd)
-	return err == nil, ignoreNotFound(err)
+	return err == nil, err
 }
